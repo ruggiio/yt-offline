@@ -1,0 +1,54 @@
+name: build-ipa
+
+# Compila un .ipa NON firmato (firma ad-hoc) e lo allega alla release "latest".
+# Lo firmi poi dal PC con plumesign (vedi flash.sh).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Progetto Xcode (XcodeGen)
+        working-directory: app
+        run: |
+          brew install xcodegen
+          xcodegen generate
+          xcodebuild -version
+
+      - name: Compila
+        working-directory: app
+        run: |
+          set -euo pipefail
+          xcodebuild -project YTOffline.xcodeproj -scheme YTOffline -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/YTOffline.xcarchive archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" > build.log 2>&1 \
+            || { grep -E "error:" -A3 build.log | head -150; tail -30 build.log; exit 1; }
+          tail -5 build.log
+
+      - name: Impacchetta
+        working-directory: app
+        run: |
+          set -euo pipefail
+          rm -rf Payload && mkdir Payload
+          cp -R build/YTOffline.xcarchive/Products/Applications/YTOffline.app Payload/
+          codesign -f -s - Payload/YTOffline.app
+          zip -qry YTOffline.ipa Payload
+          ls -l YTOffline.ipa
+
+      - name: Release "latest"
+        working-directory: app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release delete latest --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release create latest YTOffline.ipa \
+            --title "YT Offline ${GITHUB_SHA::7}" --notes "Build #${GITHUB_RUN_NUMBER} (non firmata)" --target "$GITHUB_SHA"

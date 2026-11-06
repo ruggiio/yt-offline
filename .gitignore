@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+app/build/
+app/*.xcodeproj
+app/SupportFiles/
+data/
+*.ipa
