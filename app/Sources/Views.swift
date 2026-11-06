@@ -50,6 +50,7 @@ final class PlayerSession: NSObject, AVPlayerViewControllerDelegate, UIGestureRe
     let player: AVPlayer
     let vc = AVPlayerViewController()
     var onStartPiP: (() -> Void)?
+    var onSwipeDown: (() -> Void)?
     var pipActive = false
     private var restoring = false
     private var boosted = false
@@ -80,6 +81,11 @@ final class PlayerSession: NSObject, AVPlayerViewControllerDelegate, UIGestureRe
         lp.delegate = self
         vc.view.addGestureRecognizer(lp)
 
+        // Swipe verso il basso = chiudi il lettore.
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(pan(_:)))
+        pan.delegate = self
+        vc.view.addGestureRecognizer(pan)
+
         badge.text = "  2×  ▸▸  "
         badge.font = .boldSystemFont(ofSize: 16)
         badge.textColor = .white
@@ -107,6 +113,12 @@ final class PlayerSession: NSObject, AVPlayerViewControllerDelegate, UIGestureRe
             boosted = false; player.rate = 1; badge.isHidden = true
         default: break
         }
+    }
+
+    @objc private func pan(_ g: UIPanGestureRecognizer) {
+        guard g.state == .ended else { return }
+        let t = g.translation(in: g.view), v = g.velocity(in: g.view)
+        if t.y > 120, abs(t.y) > abs(t.x) * 1.5, v.y > 0 { onSwipeDown?() }
     }
 
     func gestureRecognizer(_ a: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith b: UIGestureRecognizer) -> Bool { true }
@@ -163,12 +175,11 @@ struct PlayerScreen: View {
         ZStack(alignment: .topLeading) {
             Color.black.ignoresSafeArea()
             PlayerRepresentable(session: session).ignoresSafeArea()
-            Button { dismiss() } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title).foregroundStyle(.white.opacity(0.85)).padding(14)
-            }
         }
-        .onAppear { session.onStartPiP = { dismiss() } }
+        .onAppear {
+            session.onStartPiP = { dismiss() }
+            session.onSwipeDown = { dismiss() }
+        }
         .onDisappear {
             // In PiP la riproduzione continua; altrimenti salva e ferma.
             if !session.pipActive { session.stop() }
