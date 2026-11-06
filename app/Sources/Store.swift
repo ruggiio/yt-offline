@@ -38,6 +38,9 @@ final class Store: NSObject, ObservableObject, URLSessionDownloadDelegate {
     @Published var server: String {
         didSet { UserDefaults.standard.set(server, forKey: "server") }
     }
+    @Published var autoDelete: Bool {
+        didSet { UserDefaults.standard.set(autoDelete, forKey: "autoDelete") }
+    }
     @Published var local: [LocalVideo] = []
     @Published var remote: [RemoteVideo] = []
     @Published var jobs: [Job] = []
@@ -48,6 +51,7 @@ final class Store: NSObject, ObservableObject, URLSessionDownloadDelegate {
 
     override init() {
         server = UserDefaults.standard.string(forKey: "server") ?? "192.168.1.7:8790"
+        autoDelete = UserDefaults.standard.object(forKey: "autoDelete") as? Bool ?? true
         super.init()
         session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
         reloadLocal()
@@ -127,6 +131,22 @@ final class Store: NSObject, ObservableObject, URLSessionDownloadDelegate {
         task.resume()
     }
 
+    func deleteRemote(_ name: String) {
+        guard let base = baseURL else { return }
+        var req = URLRequest(url: base.appendingPathComponent("api/delete"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["name": name])
+        Task {
+            _ = try? await URLSession.shared.data(for: req)
+            await refresh()
+        }
+    }
+
+    func deleteCopiedFromPC() {
+        for v in remote where isLocal(v.name) { deleteRemote(v.name) }
+    }
+
     func downloadAllNew() {
         for v in remote where !isLocal(v.name) { download(v) }
     }
@@ -149,6 +169,7 @@ final class Store: NSObject, ObservableObject, URLSessionDownloadDelegate {
         try? FileManager.default.removeItem(at: dest)
         do {
             try FileManager.default.moveItem(at: location, to: dest)
+            if autoDelete { deleteRemote(name) }
         } catch {
             status = "Salvataggio fallito: \(error.localizedDescription)"
         }

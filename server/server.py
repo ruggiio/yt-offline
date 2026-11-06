@@ -144,11 +144,18 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        if urlparse(self.path).path != "/api/add":
+        path = urlparse(self.path).path
+        if path not in ("/api/add", "/api/delete"):
             return self.send_error(404)
         try:
             n = int(self.headers.get("Content-Length", 0))
             req = json.loads(self.rfile.read(n))
+            if path == "/api/delete":
+                f = DIR / Path(str(req["name"])).name  # solo file dentro la cartella
+                if f.suffix.lower() not in VIDEO_EXT or not f.is_file():
+                    raise ValueError("file non trovato")
+                f.unlink()
+                return self._json({"ok": True})
             url = str(req["url"]).strip()
             if not re.match(r"^https?://", url):
                 raise ValueError("serve un link http(s)")

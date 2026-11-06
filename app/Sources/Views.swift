@@ -88,6 +88,7 @@ struct PCView: View {
                     TextField("indirizzo:porta", text: $store.server)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .keyboardType(.URL)
+                    Toggle("Cancella dal PC dopo il download", isOn: $store.autoDelete)
                     if !store.status.isEmpty {
                         Text(store.status).font(.footnote).foregroundStyle(.red)
                     }
@@ -146,6 +147,12 @@ struct PCView: View {
                                     Image(systemName: "arrow.down.circle.fill").font(.title2)
                                 }.buttonStyle(.borderless)
                             }
+                        }
+                    }
+                    .onDelete { idx in idx.map { store.remote[$0] }.forEach { store.deleteRemote($0.name) } }
+                    if store.remote.contains(where: { store.isLocal($0.name) }) {
+                        Button("Cancella dal PC quelli già copiati", role: .destructive) {
+                            store.deleteCopiedFromPC()
                         }
                     }
                 } header: {
