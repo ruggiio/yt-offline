@@ -32,42 +32,146 @@ struct LibraryView: View {
                 }
             }
             .navigationTitle("Libreria")
-            .onAppear { store.reloadLocal() }
+            .onAppear {
+                store.reloadLocal()
+                PlayerSession.onRestore = { playing = $0 }
+            }
         }
         .fullScreenCover(item: $playing) { PlayerScreen(video: $0) }
     }
 }
 
+/// Sessione di riproduzione: sopravvive alla chiusura della schermata quando parte il PiP.
+final class PlayerSession: NSObject, AVPlayerViewControllerDelegate, UIGestureRecognizerDelegate {
+    static var current: PlayerSession?          // tenuta viva mentre il PiP è attivo
+    static var onRestore: ((LocalVideo) -> Void)?
+
+    let video: LocalVideo
+    let player: AVPlayer
+    let vc = AVPlayerViewController()
+    var onStartPiP: (() -> Void)?
+    var pipActive = false
+    private var restoring = false
+    private var boosted = false
+    private let badge = UILabel()
+
+    private var key: String { "pos:" + video.id }
+
+    static func session(for v: LocalVideo) -> PlayerSession {
+        if let s = current, s.video.id == v.id { return s }
+        return PlayerSession(v)
+    }
+
+    private init(_ v: LocalVideo) {
+        video = v
+        player = AVPlayer(url: v.url)
+        super.init()
+        let pos = UserDefaults.standard.double(forKey: key)
+        if pos > 5 { player.seek(to: CMTime(seconds: pos, preferredTimescale: 600)) }
+        vc.player = player
+        vc.allowsPictureInPicturePlayback = true
+        vc.canStartPictureInPictureAutomaticallyFromInline = true
+        vc.delegate = self
+
+        // Tieni premuto = velocità 2×, rilascia = normale.
+        let lp = UILongPressGestureRecognizer(target: self, action: #selector(longPress(_:)))
+        lp.minimumPressDuration = 0.4
+        lp.cancelsTouchesInView = false
+        lp.delegate = self
+        vc.view.addGestureRecognizer(lp)
+
+        badge.text = "  2×  ▸▸  "
+        badge.font = .boldSystemFont(ofSize: 16)
+        badge.textColor = .white
+        badge.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+        badge.layer.cornerRadius = 12; badge.layer.masksToBounds = true
+        badge.isHidden = true
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        if let ov = vc.contentOverlayView {
+            ov.addSubview(badge)
+            NSLayoutConstraint.activate([
+                badge.topAnchor.constraint(equalTo: ov.safeAreaLayoutGuide.topAnchor, constant: 16),
+                badge.centerXAnchor.constraint(equalTo: ov.centerXAnchor),
+                badge.heightAnchor.constraint(equalToConstant: 28)])
+        }
+        player.play()
+    }
+
+    @objc private func longPress(_ g: UILongPressGestureRecognizer) {
+        switch g.state {
+        case .began:
+            guard player.timeControlStatus == .playing else { return }
+            boosted = true; player.rate = 2; badge.isHidden = false
+        case .ended, .cancelled, .failed:
+            guard boosted else { return }
+            boosted = false; player.rate = 1; badge.isHidden = true
+        default: break
+        }
+    }
+
+    func gestureRecognizer(_ a: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith b: UIGestureRecognizer) -> Bool { true }
+
+    func savePosition() {
+        let t = player.currentTime().seconds
+        let d = player.currentItem?.duration.seconds ?? 0
+        // Se è finito (o quasi) riparte da capo la volta dopo.
+        UserDefaults.standard.set((d.isFinite && t > d - 10) ? 0 : t, forKey: key)
+    }
+
+    func stop() {
+        savePosition(); player.pause()
+        if PlayerSession.current === self { PlayerSession.current = nil }
+    }
+
+    // MARK: PiP
+    func playerViewControllerWillStartPictureInPicture(_ c: AVPlayerViewController) {
+        pipActive = true; restoring = false
+        PlayerSession.current = self
+        DispatchQueue.main.async { self.onStartPiP?() }
+    }
+
+    func playerViewController(_ c: AVPlayerViewController,
+                              restoreUserInterfaceForPictureInPictureStopWithCompletionHandler done: @escaping (Bool) -> Void) {
+        restoring = true
+        PlayerSession.onRestore?(video)
+        done(true)
+    }
+
+    func playerViewControllerDidStopPictureInPicture(_ c: AVPlayerViewController) {
+        pipActive = false
+        if !restoring { stop() }      // chiuso con la X del PiP
+    }
+}
+
+struct PlayerRepresentable: UIViewControllerRepresentable {
+    let session: PlayerSession
+    func makeUIViewController(context: Context) -> AVPlayerViewController { session.vc }
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {}
+}
+
 struct PlayerScreen: View {
     let video: LocalVideo
     @Environment(\.dismiss) private var dismiss
-    @State private var player: AVPlayer?
+    @State private var session: PlayerSession
 
-    private var key: String { "pos:" + video.id }
+    init(video: LocalVideo) {
+        self.video = video
+        _session = State(initialValue: PlayerSession.session(for: video))
+    }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.black.ignoresSafeArea()
-            if let player { VideoPlayer(player: player).ignoresSafeArea() }
+            PlayerRepresentable(session: session).ignoresSafeArea()
             Button { dismiss() } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.title).foregroundStyle(.white.opacity(0.85)).padding(14)
             }
         }
-        .onAppear {
-            let p = AVPlayer(url: video.url)
-            let pos = UserDefaults.standard.double(forKey: key)
-            if pos > 5 { p.seek(to: CMTime(seconds: pos, preferredTimescale: 600)) }
-            p.play()
-            player = p
-        }
+        .onAppear { session.onStartPiP = { dismiss() } }
         .onDisappear {
-            guard let p = player else { return }
-            let t = p.currentTime().seconds
-            let d = p.currentItem?.duration.seconds ?? 0
-            // Se è finito (o quasi) riparte da capo la volta dopo.
-            UserDefaults.standard.set((d.isFinite && t > d - 10) ? 0 : t, forKey: key)
-            p.pause()
+            // In PiP la riproduzione continua; altrimenti salva e ferma.
+            if !session.pipActive { session.stop() }
         }
     }
 }
