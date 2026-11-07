@@ -60,7 +60,9 @@ final class Store: NSObject, ObservableObject, URLSessionDownloadDelegate {
     var baseURL: URL? {
         var s = server.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.isEmpty { return nil }
-        if !s.hasPrefix("http") { s = "http://" + s }
+        // Il server parla solo http: ignora qualsiasi schema scritto (es. https://).
+        if let r = s.range(of: "://") { s = String(s[r.upperBound...]) }
+        s = "http://" + s
         return URL(string: s)
     }
 
