@@ -35,5 +35,4 @@ targets:
         NSLocalNetworkUsageDescription: Serve per scaricare i video dal tuo PC sulla rete di casa.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-          NSAllowsLocalNetworking: true
         ITSAppUsesNonExemptEncryption: false
