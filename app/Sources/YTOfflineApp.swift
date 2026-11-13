@@ -1,8 +1,25 @@
 import SwiftUI
 import AVFoundation
 
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    static var backgroundCompletion: (() -> Void)?
+
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        _ = Store.shared   // riaggancia la sessione in background
+        return true
+    }
+
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        AppDelegate.backgroundCompletion = completionHandler
+        _ = Store.shared
+    }
+}
+
 @main
 struct YTOfflineApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     init() {
         // Audio anche col tasto silenzioso e a schermo bloccato.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
@@ -15,7 +32,7 @@ struct YTOfflineApp: App {
 }
 
 struct RootView: View {
-    @StateObject private var store = Store()
+    @StateObject private var store = Store.shared
 
     var body: some View {
         TabView {

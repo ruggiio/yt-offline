@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UserNotifications
 
 struct RemoteVideo: Codable, Identifiable, Hashable {
     let name: String
@@ -32,6 +33,7 @@ struct LocalVideo: Identifiable, Hashable {
 }
 
 final class Store: NSObject, ObservableObject, URLSessionDownloadDelegate {
+    static let shared = Store()   // creato subito all'avvio (anche in background) per riagganciare i download in corso
     static let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     static let exts: Set<String> = ["mp4", "m4v", "mov", "m4a", "mp3"]
 
@@ -53,8 +55,18 @@ final class Store: NSObject, ObservableObject, URLSessionDownloadDelegate {
         server = UserDefaults.standard.string(forKey: "server") ?? "192.168.1.7:8790"
         autoDelete = UserDefaults.standard.object(forKey: "autoDelete") as? Bool ?? true
         super.init()
-        session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
+        // Sessione in background: i trasferimenti PC → iPhone continuano a app chiusa o schermo bloccato.
+        let cfg = URLSessionConfiguration.background(withIdentifier: "it.ruggiio.ytoffline.dl")
+        cfg.sessionSendsLaunchEvents = true
+        cfg.waitsForConnectivity = true
+        cfg.timeoutIntervalForResource = 60 * 60 * 24
+        session = URLSession(configuration: cfg, delegate: self, delegateQueue: .main)
         reloadLocal()
+        session.getAllTasks { tasks in
+            DispatchQueue.main.async {
+                for t in tasks { if let n = t.taskDescription { self.progress[n] = self.progress[n] ?? 0 } }
+            }
+        }
     }
 
     var baseURL: URL? {
@@ -130,6 +142,7 @@ final class Store: NSObject, ObservableObject, URLSessionDownloadDelegate {
         let task = session.downloadTask(with: url)
         task.taskDescription = v.name
         progress[v.name] = 0
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
         task.resume()
     }
 
@@ -171,10 +184,23 @@ final class Store: NSObject, ObservableObject, URLSessionDownloadDelegate {
         try? FileManager.default.removeItem(at: dest)
         do {
             try FileManager.default.moveItem(at: location, to: dest)
+            notifyDone(name)
             if autoDelete { deleteRemote(name) }
         } catch {
             status = "Salvataggio fallito: \(error.localizedDescription)"
         }
+    }
+
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        AppDelegate.backgroundCompletion?()
+        AppDelegate.backgroundCompletion = nil
+    }
+
+    private func notifyDone(_ name: String) {
+        let c = UNMutableNotificationContent()
+        c.title = "Scaricato"
+        c.body = (name as NSString).deletingPathExtension
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: name, content: c, trigger: nil))
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
